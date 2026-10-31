@@ -1,0 +1,82 @@
+name: Gerar APK e publicar site
+
+# Roda sozinho a cada alteração enviada para a branch main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Abrir o pacote do app (duartec-app.zip)
+        run: |
+          if [ -f duartec-app.zip ]; then unzip -o -q duartec-app.zip -d . && echo "Pacote aberto"; fi
+          ls -la
+
+      - name: Endereço da planilha (API_URL.txt)
+        run: |
+          if [ -f API_URL.txt ]; then
+            URL=$(tr -d ' \r\n' < API_URL.txt)
+            printf 'window.DT_API = "%s";\n' "$URL" > www/config.js
+          fi
+          cat www/config.js
+
+      - name: Endereço do site (GitHub Pages)
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          if [ "$REPO" = "$OWNER.github.io" ]; then BASE="https://$OWNER.github.io/"; else BASE="https://$OWNER.github.io/$REPO/"; fi
+          echo "SITE_URL=$BASE" >> "$GITHUB_ENV"
+          echo "APP_URL=${BASE}app/" >> "$GITHUB_ENV"
+          echo "Site: $BASE"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Gerar APK
+        working-directory: android
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Montar site
+        run: |
+          mkdir -p _site/app
+          cp -r site/. _site/
+          cp -r www/. _site/app/
+          cp android/app/build/outputs/apk/release/app-release.apk _site/duartec.apk
+          touch _site/.nojekyll
+          ls -la _site _site/app
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
